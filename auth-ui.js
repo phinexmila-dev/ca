@@ -25,6 +25,11 @@
     var HEARTBEAT_INTERVAL = 30000; // 30 秒
     var DEVICE_FP_KEY = 'yan_device_fp';
 
+    // ========== 管理员硬编码账号 ==========
+    var ADMIN_USERNAME = '123';
+    var ADMIN_PASSWORD = '123';
+    var ADMIN_TOKEN_PREFIX = 'admin_token_';
+
     // ========== 设备指纹（简易版，用于辅助识别） ==========
     function getDeviceFingerprint() {
         try {
@@ -78,8 +83,28 @@
         return t ? { 'Authorization': 'Bearer ' + t } : {};
     }
 
+    // ========== 检查是否为管理员登录 ==========
+    function isAdminLogin(username, password) {
+        return username === ADMIN_USERNAME && password === ADMIN_PASSWORD;
+    }
+
     // ========== HTTP 封装 ==========
     function postJson(action, body, extraHeaders) {
+        // 管理员登录拦截：如果正在执行 login 且是 admin，直接模拟返回
+        if (action === 'login' && body && isAdminLogin(body.username, body.password)) {
+            console.log('[YAN_AUTH] 管理员登录，模拟成功');
+            var fakeToken = ADMIN_TOKEN_PREFIX + Date.now() + '_' + Math.random().toString(36).substr(2);
+            return Promise.resolve({
+                status: 200,
+                data: {
+                    ok: true,
+                    token: fakeToken,
+                    username: ADMIN_USERNAME,
+                    kickedCount: 0
+                }
+            });
+        }
+
         return fetch(API_URL + '?action=' + encodeURIComponent(action), {
             method: 'POST',
             headers: Object.assign({ 'Content-Type': 'application/json' }, extraHeaders || {}),
@@ -230,9 +255,11 @@
 
         // 回车提交
         [userInput, pwdInput, pwd2Input, inviteInput].forEach(function (inp) {
-            inp.addEventListener('keydown', function (e) {
-                if (e.key === 'Enter') doSubmit();
-            });
+            if (inp) {
+                inp.addEventListener('keydown', function (e) {
+                    if (e.key === 'Enter') doSubmit();
+                });
+            }
         });
 
         submitBtn.addEventListener('click', doSubmit);
@@ -310,7 +337,7 @@
             forgotWrap.style.display = 'block';
             hintEl.textContent = '';
             hintEl.innerHTML = '每个账号最多 3 台设备同时登录<br/>超过时最早登录的设备会被自动踢出';
-            pwd2Input.value = '';
+            if (pwd2Input) pwd2Input.value = '';
         } else if (mode === 'register') {
             title.textContent = '注册新账号';
             sub.textContent = '用户名 2-32 位（不区分大小写），密码至少 6 位';
@@ -338,7 +365,7 @@
             inviteWrap.style.display = 'block';
             forgotWrap.style.display = 'none';
             hintEl.innerHTML = '输入您注册时使用的邀请码<br/>验证通过后即可设置新密码';
-            pwd2Input.value = '';
+            if (pwd2Input) pwd2Input.value = '';
         }
         setOverlayMsg('', '');
     }
@@ -361,8 +388,8 @@
 
         var inviteCode = '';
         if (currentMode === 'register' || currentMode === 'reset') {
-            var pwd2 = (overlay.querySelector('#yan-auth-pwd2').value || '');
-            inviteCode = (overlay.querySelector('#yan-auth-invite').value || '').trim();
+            var pwd2 = (overlay.querySelector('#yan-auth-pwd2')?.value || '');
+            inviteCode = (overlay.querySelector('#yan-auth-invite')?.value || '').trim();
             if (password.length < 6) {
                 setOverlayMsg('error', '密码至少需要 6 位');
                 return;
@@ -527,6 +554,11 @@
     function doHeartbeat() {
         var t = getToken();
         if (!t) { stopHeartbeat(); return; }
+        // 管理员 token 不发送心跳（直接忽略）
+        if (t.indexOf(ADMIN_TOKEN_PREFIX) === 0) {
+            // 管理员账号，无心跳
+            return;
+        }
         postJson('heartbeat', {}, { 'Authorization': 'Bearer ' + t })
             .then(function (r) {
                 if (r.status === 401 && r.data) {
@@ -547,6 +579,13 @@
 
     // ========== 设备列表 ==========
     function showDevicesModal() {
+        // 管理员账号不支持设备管理（因为没有后端）
+        var token = getToken();
+        if (token && token.indexOf(ADMIN_TOKEN_PREFIX) === 0) {
+            alert('管理员账号暂不支持设备管理功能');
+            return;
+        }
+
         injectStyle();
         var mask = document.createElement('div');
         mask.id = 'yan-devices-mask';
@@ -647,7 +686,8 @@
         var t = getToken();
         stopHeartbeat();
         clearAuth();
-        if (t) {
+        // 如果不是管理员 token，才发送登出请求
+        if (t && t.indexOf(ADMIN_TOKEN_PREFIX) !== 0) {
             postJson('logout', {}, { 'Authorization': 'Bearer ' + t }).catch(function () {});
         }
         showOverlay();
